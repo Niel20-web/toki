@@ -1,0 +1,3096 @@
+From cef65a84c269910ee3e67f5b5d4600b8765ca20a Mon Sep 17 00:00:00 2001
+From: Toki Release <toki@example.invalid>
+Date: Sat, 24 Oct 2026 21:31:08 +0530
+Subject: [PATCH] Toki v1.0: sensors, emotions, audio task, README
+
+- toki.ino: full v1.0 (OLED face, MPU6050 motion, INMP441 mic, I2S audio
+  task with WAV playback + chirp fallback, button gestures, serial commands)
+- toki_types.h: shared types so Arduino's auto-prototypes compile
+- volume/mute persisted with Preferences; IMU sampled at 200 Hz
+- data/: add missing dizzy.wav, love.wav, blip.wav (existing sounds untouched)
+- README.md with wiring, setup, controls, tuning; tools/make_sounds.py
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GVNPkoASQGPvrRqcpj2U9s
+---
+ README.md            |   83 ++
+ data/blip.wav        |  Bin 0 -> 1964 bytes
+ data/dizzy.wav       |  Bin 0 -> 15724 bytes
+ data/love.wav        |  Bin 0 -> 17004 bytes
+ toki.ino             | 2090 ++++++++++++++++++++----------------------
+ toki_types.h         |   22 +
+ tools/make_sounds.py |   68 ++
+ 7 files changed, 1188 insertions(+), 1075 deletions(-)
+ create mode 100644 README.md
+ create mode 100644 data/blip.wav
+ create mode 100644 data/dizzy.wav
+ create mode 100644 data/love.wav
+ create mode 100644 toki_types.h
+ create mode 100644 tools/make_sounds.py
+
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..c451531
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,83 @@
++# Toki v1.0
++
++A tiny robot with feelings, on a Seeed XIAO ESP32-S3. Toki has animated eyes on an OLED, reacts to being shaken, tilted, bumped, petted and talked to, and answers with little chirps.
++
++## Files
++
++| File | What it is |
++|---|---|
++| `toki.ino` | The sketch |
++| `toki_types.h` | Shared types (must sit in the same folder as `toki.ino`) |
++| `data/` | Sound files, uploaded to the board's LittleFS (the sketch uses 10 of them; `bluetooth`, `cheerful`, `chuckle`, `low_battery` and `pomodoro_finish` are not used yet) |
++| `tools/make_sounds.py` | Regenerates the sounds (optional) |
++
++## Wiring
++
++| Part | Pin on part | XIAO ESP32-S3 |
++|---|---|---|
++| OLED SH1106 (I2C, 0x3C) | VCC / GND | 3V3 / GND |
++| | SDA / SCL | D4 (GPIO5) / D5 (GPIO6) |
++| MPU6050 (I2C, 0x69) | VCC / GND | 3V3 / GND |
++| | SDA / SCL | D4 (GPIO5) / D5 (GPIO6) |
++| | AD0 | 3V3 |
++| INMP441 mic | VDD / GND | 3V3 / GND |
++| | SCK | D0 (GPIO1) |
++| | WS | D1 (GPIO2) |
++| | SD | D2 (GPIO3) |
++| | L/R | GND |
++| MAX98357 amp | VIN / GND | 5V (or 3V3) / GND |
++| | BCLK | D9 (GPIO8) |
++| | LRC | D8 (GPIO7) |
++| | DIN | D10 (GPIO9) |
++| Button | | the onboard BOOT button (GPIO0) |
++
++Speaker goes on the amp's output terminals.
++
++## Setup
++
++1. **Arduino IDE**: install the *esp32 by Espressif* board package (version 3.x), then pick the board **XIAO_ESP32S3**.
++2. **Libraries** (Library Manager): *Adafruit GFX Library* and *Adafruit SH110X*. Audio and mic use the built-in `ESP_I2S`, so the old ESP8266Audio library is **not** needed.
++3. **Tools menu**: set **USB CDC On Boot: Enabled**, and **Partition Scheme** to one that includes a data partition (for example *8M with spiffs*, or the default scheme if it lists SPIFFS). The `data` folder is about 0.9 MB, so a scheme with at least 1.5 MB of SPIFFS/LittleFS is needed.
++4. **Upload the sounds**: use a LittleFS upload plugin for Arduino IDE 2.x (for example *arduino-littlefs-upload*), with the `data` folder next to `toki.ino`. Then upload the sketch.
++
++If a sound file is missing, Toki plays a built-in chirp instead, so he always makes noise. Type `status` in the Serial Monitor to see which files were found.
++
++## What Toki does
++
++| You do this | Toki does this |
++|---|---|
++| Leave him alone | Blinks, glances around, now and then gets curious or happy |
++| Idle for 60 s | Gets sleepy, then falls asleep (Zzz) |
++| Tilt him | His eyes look the way he is leaning |
++| Turn him upside down | The screen flips to stay readable |
++| Click the BOOT button | Happy |
++| Double-click | Love (hearts) |
++| Hold for 1.5 s | Mute / unmute (remembered after reboot) |
++| Shake him | Angry; keep shaking and he gets dizzy |
++| Bump or drop him | Surprised |
++| Clap or make a loud noise | Surprised |
++| Talk near him | Curious |
++| Touch, move or talk to him while asleep | Wakes up (a bump or shake wakes him startled) |
++
++The mic ignores Toki's own speaker, and adapts to the room's background noise during the first 1.5 seconds after power-up, so keep things quiet then. Keep him still for the first second too, because that is when the gyro is zeroed.
++
++## Serial commands (115200 baud)
++
++`help`, `status`, `files`, `imu`, `mic` (toggle live sensor streams), `vol 0.0-1.0`, `mute`, `unmute`, the emotions `neutral happy angry curious surprised sleepy dizzy love wake`, and `sound <name>` (`startup happy curious angry surprise sleep wake dizzy love blip`).
++
++## Tuning
++
++All the knobs are at the top of `toki.ino`:
++
++- **Eyes look the wrong way when tilting**: flip `LOOK_X_SIGN` / `LOOK_Y_SIGN`.
++- **Screen flips at the wrong time, or never**: run `imu`, hold Toki the way you want "upright", and set `UP_AXIS` (0=X, 1=Y, 2=Z) and `UP_SIGN` so that axis reads +1 g.
++- **Reacts to quiet sounds, or ignores claps**: run `mic`, then adjust `MIC_LOUD_RATIO`, `MIC_LOUD_MIN`, `MIC_VOICE_RATIO`, `MIC_VOICE_MIN`.
++- **Too sensitive or not sensitive to shaking**: `SHAKE_ON`, `SHAKE_OFF`, `JOLT_G`.
++- **Falls asleep too fast / never**: `SLEEP_AFTER_MS` (0 = never).
++
++## Troubleshooting
++
++- **Nothing on the OLED**: the boot log prints an I2C scan. You should see 0x3C and 0x69. If it lists nothing, check power and that header pins are soldered.
++- **No sound, but the log says audio is fine**: check the amp's BCLK/LRC/DIN wiring and that the speaker is on the amp's output terminals.
++- **"LittleFS FAILED"**: the partition scheme has no data partition. Change it in the Tools menu and upload again.
++- **Mic reactions disabled**: the log says `[mic] INMP441 failed to start`. Check SCK/WS/SD and that L/R is on GND.
+diff --git a/data/blip.wav b/data/blip.wav
+new file mode 100644
+index 0000000000000000000000000000000000000000..970a3631851190a9083448c4ab2452195a771170
+GIT binary patch
+literal 1964
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/data/dizzy.wav b/data/dizzy.wav
+new file mode 100644
+index 0000000000000000000000000000000000000000..6870385c4ff7f12da8ce049721d57ebadcfbc9a1
+GIT binary patch
+literal 15724
+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
+G;Qs(F;e-VM
+
+literal 0
+HcmV?d00001
+
+diff --git a/data/love.wav b/data/love.wav
+new file mode 100644
+index 0000000000000000000000000000000000000000..d29d87b06fb7f4edd97e4afa0739e4b7f3853158
+GIT binary patch
+literal 17004
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/toki.ino b/toki.ino
+index 4f4ee17..483df0e 100644
+--- a/toki.ino
++++ b/toki.ino
+@@ -1,1185 +1,1125 @@
++/*
++  ============================================================
++   TOKI v1.0  -  a tiny robot with feelings
++  ============================================================
++  Board    : Seeed XIAO ESP32-S3 (ESP32 Arduino core 3.x)
++  Libraries: Adafruit GFX Library, Adafruit SH110X
++             (audio + microphone use the built-in ESP_I2S library,
++              so the old ESP8266Audio library is NOT needed any more)
++
++  Wiring
++    OLED SH1106 (I2C)  SDA -> D4 (GPIO5)   SCL -> D5 (GPIO6)   addr 0x3C
++    MPU6050   (I2C)    SDA -> D4 (GPIO5)   SCL -> D5 (GPIO6)   addr 0x69 (AD0 -> 3V3)
++    I2S amp (MAX98357) BCLK -> D9 (GPIO8)  LRC -> D8 (GPIO7)   DIN -> D10 (GPIO9)
++    INMP441 mic        SCK -> D0 (GPIO1)   WS -> D1 (GPIO2)    SD -> D2 (GPIO3)   L/R -> GND
++    Button             the BOOT button on the XIAO (GPIO0)
++
++  Sounds: put WAV files in a "data" folder next to this sketch and upload
++  with the LittleFS uploader. See README.md for the file names. If a file
++  is missing Toki beeps and chirps instead, so it always works.
++
++  Volume and mute are remembered across reboots.
++
++  Serial Monitor (115200): type "help" for test commands.
++*/
++
++#include <Arduino.h>
+ #include <Wire.h>
+ #include <Adafruit_GFX.h>
+ #include <Adafruit_SH110X.h>
+ #include <LittleFS.h>
+-#include <AudioFileSourceLittleFS.h>
+-#include <AudioGeneratorWAV.h>
+-#include <AudioOutputI2S.h>
+-
+-#define SCREEN_WIDTH 128
+-#define SCREEN_HEIGHT 64
+-
+-Adafruit_SH1106G display(128, 64, &Wire, -1);
+-
+-AudioGeneratorWAV *wav = nullptr;
+-AudioFileSourceLittleFS *audioFile = nullptr;
+-AudioOutputI2S *audioOutput = nullptr;
+-
+-const int EYE_RADIUS = 12;
+-const int PUPIL_RADIUS = 5;
+-
+-const int LEFT_EYE_X  = 35;
+-const int LEFT_EYE_Y  = 32;
+-
+-const int RIGHT_EYE_X = 93;
+-const int RIGHT_EYE_Y = 32;
+-int pupilOffsetX = 0;
+-int pupilOffsetY = 0;
+-int eyeoffsetx=0;
+-int eyeoffsety=0;
+-
+-//==============================
+-// Pupil Movement
+-//==============================
+-int targetEyeOffsetX = 0;
+-int targetEyeOffsetY = 0;
+-int targetPupilOffsetX = 0;
+-int targetPupilOffsetY = 0;
+-
+-
+-int eyeOpen = EYE_RADIUS;
+-
+-//==============================
+-// Setup
+-//==============================
+-
+-
+-// ===== Emotion System =====
+-enum Emotion{NEUTRAL,HAPPY,ANGRY,CURIOUS,SURPRISED,SLEEPING};
+-Emotion currentEmotion=NEUTRAL;
+-void drawBrows(Emotion e); // explicit prototype, prevents Arduino's auto-generated one from landing above the enum
+-void drawBrows(Emotion e){
+- switch(e){
+- case HAPPY: drawHappyBrows(); break;
+- case ANGRY: drawAngryBrows(); break;
+- case CURIOUS: drawCuriousBrows(); break;
+- case SURPRISED: drawSurprisedBrows(); break;
+- case SLEEPING: drawSleepingBrows(); break;
+- default: drawLeftBrow(); drawRightBrow(); break;
+- }}
+-void initFace()
+-{
+-    Wire.begin();
+-    Wire.setClock(400000);
+-
+-    if (!display.begin(0x3C, true))
+-    {
+-        while(true);
+-    }
+-
+-    display.clearDisplay();
+-    display.display();
++#include <ESP_I2S.h>
++#include <Preferences.h>
++#include "toki_types.h"
++
++// ============================================================
++//  CONFIG  (everything you might want to tune lives here)
++// ============================================================
++
++// ---- Pins ----
++#define PIN_SDA        5      // D4
++#define PIN_SCL        6      // D5
++#define PIN_AMP_BCLK   8      // D9
++#define PIN_AMP_LRC    7      // D8
++#define PIN_AMP_DIN    9      // D10
++#define PIN_MIC_SCK    1      // D0
++#define PIN_MIC_WS     2      // D1
++#define PIN_MIC_SD     3      // D2
++#define PIN_BUTTON     0      // BOOT button
++
++// ---- I2C ----
++#define I2C_CLOCK      400000
++#define OLED_ADDR      0x3C
++#define MPU_ADDR       0x69
++
++// ---- Behaviour ----
++#define DEFAULT_VOLUME     0.5f      // 0.0 - 1.0
++#define FRAME_MS           33        // ~30 fps
++#define BOOT_MS            3000UL
++#define SLEEP_AFTER_MS     60000UL   // idle time before Toki falls asleep (0 = never)
++#define SLEEPY_MS          4000UL    // drowsy phase before sleeping
++#define SHAKE_DIZZY_MS     3500UL    // shake this long and Toki gets dizzy
++#define IDLE_EVENT_MIN_MS  20000UL   // random "curious / happy" moments
++#define IDLE_EVENT_MAX_MS  45000UL
++
++// ---- Motion sensor orientation ----
++// UP_AXIS: which MPU6050 axis reads +1 g when Toki stands the way you
++// normally hold him (0=X, 1=Y, 2=Z). Use the serial command "imu" to see.
++// UP_SIGN: +1 or -1 so that "upright" reads +1 g.
++#define UP_AXIS        2
++#define UP_SIGN        1
++// If the eyes follow the tilt the wrong way, flip these.
++#define LOOK_X_SIGN    1
++#define LOOK_Y_SIGN    1
++#define AUTO_ROTATE    1      // flip the screen when Toki is turned upside down
++
++// ---- Motion thresholds (g) ----
++#define JOLT_G         1.3f   // sudden bump
++#define FALL_G         0.35f  // free fall
++#define SHAKE_ON       0.70f
++#define SHAKE_OFF      0.35f
++
++// ---- Microphone thresholds (see "mic" serial command) ----
++#define MIC_SHIFT        14      // 32-bit sample >> 14
++#define MIC_MIN_BASE     8.0f
++#define MIC_LOUD_RATIO   6.0f
++#define MIC_LOUD_MIN     1500.0f
++#define MIC_VOICE_RATIO  2.5f
++#define MIC_VOICE_MIN    120.0f
++
++// ---- Face geometry ----
++#define SCREEN_WIDTH   128
++#define SCREEN_HEIGHT  64
++#define EYE_RADIUS     12
++#define LEFT_EYE_X     35
++#define RIGHT_EYE_X    93
++#define EYE_Y          32
++
++// ============================================================
++//  TYPES
++// ============================================================
++
++//                                   NEUT HAPPY ANGRY CUR SURP SLPY SLP DIZZY LOVE
++static const uint8_t EMO_PRIO[9] = {  0,   2,    4,    1,   3,   1,   1,   3,    2 };
++
++// WAV file name + fallback chirp for every sound
++static const SoundDef SOUNDS[SND_COUNT] = {
++  { "startup",  "/startup_alt.wav",  { {400, 800, 120}, {800, 600, 80}, {600, 1200, 160} }, 3 },
++  { "happy",    "/happy.wav",        { {700, 1100, 90}, {1100, 900, 60}, {900, 1400, 120} }, 3 },
++  { "curious",  "/curious.wav",      { {500, 900, 140}, {0, 0, 60}, {700, 1100, 160} }, 3 },
++  { "angry",    "/angry2.wav",       { {300, 200, 140}, {0, 0, 40}, {300, 180, 200} }, 3 },
++  { "surprise", "/surprise_1.wav",   { {600, 1600, 110}, {1600, 1500, 100} }, 2 },
++  { "sleep",    "/sleep_toki.wav",   { {700, 400, 300}, {400, 250, 500} }, 2 },
++  { "wake",     "/wake_up_2.wav",    { {300, 600, 180}, {600, 900, 160} }, 2 },
++  { "dizzy",    "/dizzy.wav",        { {500, 900, 90}, {900, 400, 90}, {400, 900, 90}, {900, 300, 120} }, 4 },
++  { "love",     "/love.wav",         { {800, 1000, 100}, {0, 0, 40}, {1000, 1300, 160} }, 3 },
++  { "blip",     "/blip.wav",         { {900, 1100, 50} }, 1 },
++};
++
++// ============================================================
++//  GLOBALS
++// ============================================================
++
++Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
++
++static bool oledOK = false;
++static bool fsOK   = false;
++
++static inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
++static inline void approach(float &cur, float target, float k) {
++  cur += (target - cur) * k;
++  if (fabsf(target - cur) < 0.05f) cur = target;
+ }
+-
+-void audioSetup()
+-{
+-    if (!LittleFS.begin(true))
+-    {
+-        Serial.println("LittleFS FAILED");
+-        return;
+-    }
+-
+-    Serial.println("LittleFS OK");
+-
+-    audioOutput = new AudioOutputI2S();
+-
+-    // BCLK, LRCLK, DIN
+-    audioOutput->SetPinout(8, 7, 9);
+-
+-    audioOutput->SetGain(0.5);
+-
+-    Serial.println("Audio ready");
++static bool takeFlag(volatile bool &f) { bool v = f; f = false; return v; }
++
++// ============================================================
++//  AUDIO  (runs in its own task on core 0, so animation never stutters)
++//  Plays 16-bit PCM WAV files from LittleFS. Falls back to chirps.
++// ============================================================
++
++static I2SClass spk;
++static uint32_t spkRate = 0;
++static QueueHandle_t soundQ = nullptr;
++
++static volatile bool     gStop     = false;
++static volatile bool     gSpeaking = false;
++static volatile uint32_t gSpeakEnd = 0;
++static volatile float    gVolume   = DEFAULT_VOLUME;
++static volatile bool     gMuted    = false;
++static Preferences       prefs;
++
++static void saveSettings() {
++  prefs.putFloat("vol", gVolume);
++  prefs.putBool("mute", gMuted);
+ }
+ 
+-void setup() {
+-  initFace();
+-  audioSetup();
+-
++static bool spkStart(uint32_t rate) {
++  if (spkRate == rate) return true;
++  if (spkRate) spk.end();
++  spkRate = 0;
++  spk.setPins(PIN_AMP_BCLK, PIN_AMP_LRC, PIN_AMP_DIN);
++  if (!spk.begin(I2S_MODE_STD, rate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO)) {
++    Serial.println("[audio] I2S start failed");
++    return false;
++  }
++  spkRate = rate;
++  return true;
+ }
+ 
++static void spkSilence() {
++  static int16_t z[256];
++  memset(z, 0, sizeof(z));
++  spk.write((const uint8_t *)z, sizeof(z));   // short tail of silence avoids pops
++}
+ 
+-//==============================
+-// Loop
+-//==============================
+-
+-void loop()
+-{
+-    // =========================
+-    // STARTUP
+-    // =========================
+-
+-    playSound("/startup_alt.wav");
+-    startup();
+-
+-    delay(500);
+-
+-
+-    // =========================
+-    // NORMAL MOVEMENT
+-    // =========================
+-
+-    blink();
+-    delay(500);
+-
+-    lookLeft();
+-    moveEyes();
+-    delay(500);
+-
+-    lookRight();
+-    moveEyes();
+-    delay(500);
+-
+-    lookCenter();
+-    moveEyes();
+-    delay(1000);
+-
+-
+-    // =========================
+-    // HAPPY
+-    // =========================
+-
+-    playSound("/happy.wav");
+-    happyBounce();
+-
+-    while (wav && wav->isRunning())
+-    {
+-        audioLoop();
+-    }
+-
+-    delay(500);
+-
+-
+-    // =========================
+-    // CURIOUS
+-    // =========================
+-
+-    playSound("/curious.wav");
+-    curiousAnimation();
+-
+-    while (wav && wav->isRunning())
+-    {
+-        audioLoop();
+-    }
+-
+-    delay(500);
+-
+-
+-    // =========================
+-    // ANGRY
+-    // =========================
+-
+-    playSound("/angry2.wav");
+-    angryShake();
+-
+-    while (wav && wav->isRunning())
+-    {
+-        audioLoop();
++// returns true if the file was a valid WAV and playback was started
++static bool playWav(const char *path) {
++  File f = LittleFS.open(path, "r");
++  if (!f) return false;
++
++  uint8_t hdr[12];
++  if (f.read(hdr, 12) != 12 || memcmp(hdr, "RIFF", 4) || memcmp(hdr + 8, "WAVE", 4)) {
++    Serial.printf("[audio] %s is not a WAV file\n", path);
++    f.close();
++    return false;
++  }
++
++  uint16_t fmt = 0, ch = 0, bits = 0;
++  uint32_t rate = 0, dataLen = 0;
++  bool haveFmt = false;
++
++  while (f.available()) {
++    uint8_t ck[8];
++    if (f.read(ck, 8) != 8) break;
++    uint32_t sz = ck[4] | (ck[5] << 8) | (ck[6] << 16) | ((uint32_t)ck[7] << 24);
++    if (!memcmp(ck, "fmt ", 4)) {
++      uint8_t fb[16];
++      if (sz < 16 || f.read(fb, 16) != 16) break;
++      fmt  = fb[0] | (fb[1] << 8);
++      ch   = fb[2] | (fb[3] << 8);
++      rate = fb[4] | (fb[5] << 8) | (fb[6] << 16) | ((uint32_t)fb[7] << 24);
++      bits = fb[14] | (fb[15] << 8);
++      haveFmt = true;
++      uint32_t rest = (sz - 16) + (sz & 1);
++      if (rest) f.seek(f.position() + rest);
++    } else if (!memcmp(ck, "data", 4)) {
++      dataLen = sz;
++      break;
++    } else {
++      f.seek(f.position() + sz + (sz & 1));
+     }
+-
+-    delay(500);
+-
+-
+-    // =========================
+-    // SURPRISED
+-    // =========================
+-
+-    playSound("/surprise_1.wav");
+-    surpriseAnimation();
+-
+-    while (wav && wav->isRunning())
+-    {
+-        audioLoop();
++  }
++
++  if (!haveFmt || !dataLen || (fmt != 1 && fmt != 0xFFFE) || bits != 16 || (ch != 1 && ch != 2)) {
++    Serial.printf("[audio] %s: need 16-bit PCM mono/stereo WAV\n", path);
++    f.close();
++    return false;
++  }
++  uint32_t remain = f.size() - f.position();
++  if (dataLen > remain) dataLen = remain;
++
++  if (!spkStart(rate)) { f.close(); return false; }
++
++  static int16_t inBuf[512];
++  static int16_t outBuf[1024];
++  const size_t frameBytes = ch * 2;
++
++  gSpeaking = true;
++  while (dataLen && !gStop) {
++    size_t want = sizeof(inBuf);
++    if (want > dataLen) want = dataLen;
++    want -= want % frameBytes;
++    if (!want) break;
++    int n = f.read((uint8_t *)inBuf, want);
++    if (n <= 0) break;
++    dataLen -= n;
++    size_t frames = n / frameBytes;
++    int32_t vol = (int32_t)(gVolume * 256.0f);
++    if (ch == 1) {
++      for (size_t i = 0; i < frames; i++) {
++        int16_t s = (int16_t)(((int32_t)inBuf[i] * vol) >> 8);
++        outBuf[2 * i] = s;
++        outBuf[2 * i + 1] = s;
++      }
++    } else {
++      for (size_t i = 0; i < frames * 2; i++) outBuf[i] = (int16_t)(((int32_t)inBuf[i] * vol) >> 8);
+     }
+-
+-    delay(500);
+-
+-// =========================
+-// SLEEP
+-// =========================
+-
+-
+-
+-sleeping();
+-sleepBreathing();
+-
+-while (wav && wav->isRunning())
+-{
+-    audioLoop();
++    spk.write((const uint8_t *)outBuf, frames * 4);
++  }
++  spkSilence();
++  f.close();
++  return true;
+ }
+ 
+-delay(500);
+-
+-
+-    // =========================
+-    // WAKE UP
+-    // =========================
+-
+-    playSound("/wake_up_2.wav");
+-    wakeup();
+-
+-    while (wav && wav->isRunning())
+-    {
+-        audioLoop();
++// built-in chirps (used when the WAV is missing)
++static void playTones(const SoundDef &s) {
++  if (!spkStart(16000)) return;
++  static int16_t out[512];   // 256 stereo frames
++  const float vol = gVolume;
++  float phase = 0;
++  gSpeaking = true;
++  for (uint8_t i = 0; i < s.nSteps && !gStop; i++) {
++    const ToneStep &st = s.steps[i];
++    uint32_t total = (uint32_t)st.ms * 16;
++    uint32_t done = 0;
++    while (done < total && !gStop) {
++      uint32_t n = total - done;
++      if (n > 256) n = 256;
++      for (uint32_t k = 0; k < n; k++) {
++        float u = (float)(done + k) / (float)total;
++        int16_t v = 0;
++        if (st.f0) {
++          float f = st.f0 + ((float)st.f1 - (float)st.f0) * u;
++          float env = (u < 0.1f) ? (u / 0.1f) : ((u > 0.8f) ? ((1.0f - u) / 0.2f) : 1.0f);
++          phase += 6.2831853f * f / 16000.0f;
++          if (phase > 6.2831853f) phase -= 6.2831853f;
++          v = (int16_t)(sinf(phase) * env * 8000.0f * vol);
++        }
++        out[2 * k] = v;
++        out[2 * k + 1] = v;
++      }
++      spk.write((const uint8_t *)out, n * 4);
++      done += n;
+     }
+-
+-    delay(1000);
+-
+-
+-    // =========================
+-    // IDLE
+-    // =========================
+-
+-    idleAnimation();
+-
+-    delay(3000);
++  }
++  spkSilence();
+ }
+-//==============================
+-// Draw One Frame
+-//==============================
+-void drawFrame()
+-{
+-    display.clearDisplay();
+-
+-    drawFace();
+ 
+-    display.display();
++static void audioTask(void *) {
++  uint8_t id;
++  for (;;) {
++    if (xQueueReceive(soundQ, &id, portMAX_DELAY) != pdTRUE) continue;
++    if (id >= SND_COUNT || gMuted) continue;
++    gStop = false;
++    const SoundDef &s = SOUNDS[id];
++    bool ok = false;
++    if (fsOK) ok = playWav(s.file);
++    if (!ok && !gStop) playTones(s);
++    gSpeakEnd = millis() + 250;
++    gSpeaking = false;
++  }
+ }
+ 
+-//==============================
+-// Draw Eye
+-//==============================
+-void drawEye(int x, int y)
+-{
+-    // Draw the white eye
+-    display.fillCircle(
+-        x + eyeoffsetx,
+-        y + eyeoffsety,
+-        EYE_RADIUS,
+-        SH110X_WHITE
+-    );
+-
+-    // Hide the top part of the eye
+-    display.fillRect(
+-        x - EYE_RADIUS + eyeoffsetx,
+-        y - EYE_RADIUS + eyeoffsety,
+-        EYE_RADIUS * 2,
+-        EYE_RADIUS - eyeOpen,
+-        SH110X_BLACK
+-    );
+-
+-    // Hide the bottom part
+-    display.fillRect(
+-        x - EYE_RADIUS + eyeoffsetx,
+-        y + eyeOpen + eyeoffsety,
+-        EYE_RADIUS * 2,
+-        EYE_RADIUS - eyeOpen,
+-        SH110X_BLACK
+-    );
+-
+-    // Only draw pupil if eye is open enough
+-    if (eyeOpen > 3)
+-    {
+-        display.fillCircle(
+-            x + eyeoffsetx + pupilOffsetX,
+-            y + eyeoffsety + pupilOffsetY,
+-            PUPIL_RADIUS,
+-            SH110X_BLACK
+-        );
+-    }
+-}
+-//==============================
+-// Left Eyebrow
+-//==============================
+-void drawLeftBrow()
+-{
+-    display.drawLine(18,22,24,18,SH110X_WHITE);
+-    display.drawLine(24,18,30,15,SH110X_WHITE);
+-    display.drawLine(30,15,35,17,SH110X_WHITE);
+-
+-    display.drawLine(18,23,24,19,SH110X_WHITE);
+-    display.drawLine(24,19,30,16,SH110X_WHITE);
+-    display.drawLine(30,16,35,18,SH110X_WHITE);
+-
+-    display.drawLine(18,24,24,20,SH110X_WHITE);
+-    display.drawLine(24,20,30,17,SH110X_WHITE);
+-    display.drawLine(30,17,35,19,SH110X_WHITE);
++static void playSound(SoundId id) {
++  if (id == SND_NONE || gMuted || !soundQ) return;
++  gSpeakEnd = millis() + 400;   // mic ignores itself right away
++  gStop = true;                 // interrupt whatever is playing
++  uint8_t v = (uint8_t)id;
++  xQueueOverwrite(soundQ, &v);  // latest request wins
+ }
+ 
+-//==============================
+-// Right Eyebrow
+-//==============================
+-void drawRightBrow()
+-{
+-    display.drawLine(93,17,98,15,SH110X_WHITE);
+-    display.drawLine(98,15,104,18,SH110X_WHITE);
+-    display.drawLine(104,18,110,22,SH110X_WHITE);
+-
+-    display.drawLine(93,18,98,16,SH110X_WHITE);
+-    display.drawLine(98,16,104,19,SH110X_WHITE);
+-    display.drawLine(104,19,110,23,SH110X_WHITE);
+-
+-    display.drawLine(93,19,98,17,SH110X_WHITE);
+-    display.drawLine(98,17,104,20,SH110X_WHITE);
+-    display.drawLine(104,20,110,24,SH110X_WHITE);
++static void stopSound() {
++  gStop = true;
++  if (soundQ) xQueueReset(soundQ);
+ }
+ 
+-//==============================
+-// Happy Brows (raised, gentle arch)
+-//==============================
+-void drawHappyBrows()
+-{
+-    display.drawLine(18,19,24,15,SH110X_WHITE);
+-    display.drawLine(24,15,30,12,SH110X_WHITE);
+-    display.drawLine(30,12,35,14,SH110X_WHITE);
+-
+-    display.drawLine(18,20,24,16,SH110X_WHITE);
+-    display.drawLine(24,16,30,13,SH110X_WHITE);
+-    display.drawLine(30,13,35,15,SH110X_WHITE);
+-
+-    display.drawLine(18,21,24,17,SH110X_WHITE);
+-    display.drawLine(24,17,30,14,SH110X_WHITE);
+-    display.drawLine(30,14,35,16,SH110X_WHITE);
+-
+-    display.drawLine(93,14,98,12,SH110X_WHITE);
+-    display.drawLine(98,12,104,15,SH110X_WHITE);
+-    display.drawLine(104,15,110,19,SH110X_WHITE);
+-
+-    display.drawLine(93,15,98,13,SH110X_WHITE);
+-    display.drawLine(98,13,104,16,SH110X_WHITE);
+-    display.drawLine(104,16,110,20,SH110X_WHITE);
+-
+-    display.drawLine(93,16,98,14,SH110X_WHITE);
+-    display.drawLine(98,14,104,17,SH110X_WHITE);
+-    display.drawLine(104,17,110,21,SH110X_WHITE);
+-}
++// ============================================================
++//  MICROPHONE  (INMP441, own task on core 0)
++// ============================================================
+ 
+-//==============================
+-// Angry Brows (slant down toward center)
+-//==============================
+-void drawAngryBrows()
+-{
+-    // Left eyebrow (slants downward toward the center)
+-    for(int i = 0; i < 3; i++)
+-    {
+-        display.drawLine(
+-            LEFT_EYE_X - 12,
+-            LEFT_EYE_Y - 14 + i,
+-            LEFT_EYE_X + 2,
+-            LEFT_EYE_Y - 8 + i,
+-            SH110X_WHITE
+-        );
+-    }
++static I2SClass mic;
++static bool micOK = false;
++static volatile float    micRms = 0, micBase = 100, micRatio = 1;
++static volatile bool     micLoud = false;
++static volatile uint32_t micVoiceMs = 0;
+ 
+-    // Right eyebrow (mirror image)
+-    for(int i = 0; i < 3; i++)
+-    {
+-        display.drawLine(
+-            RIGHT_EYE_X - 2,
+-            RIGHT_EYE_Y - 8 + i,
+-            RIGHT_EYE_X + 12,
+-            RIGHT_EYE_Y - 14 + i,
+-            SH110X_WHITE
+-        );
+-    }
++static float micNorm() {   // 0..1 "how loud is it right now"
++  if (!micOK) return 0;
++  return clampf((micRatio - 1.0f) / 5.0f, 0.0f, 1.0f);
+ }
+ 
+-//==============================
+-// Curious Brows (one raised, quizzical)
+-//==============================
+-void drawCuriousBrows()
+-{
+-    drawLeftBrow();
+-
+-    display.drawLine(93,12,98,9,SH110X_WHITE);
+-    display.drawLine(98,9,104,11,SH110X_WHITE);
+-    display.drawLine(104,11,110,16,SH110X_WHITE);
++static void micTask(void *) {
++  static int32_t buf[256];
++  uint32_t lastLoud = 0, voiceStart = 0, lastVoice = 0;
++  int warm = 0;
++  float base = 100;
++
++  for (;;) {
++    size_t got = mic.readBytes((char *)buf, sizeof(buf));
++    int n = (int)(got / sizeof(int32_t));
++    if (n <= 0) { vTaskDelay(pdMS_TO_TICKS(5)); continue; }
++
++    int64_t sum = 0;
++    for (int i = 0; i < n; i++) { buf[i] >>= MIC_SHIFT; sum += buf[i]; }
++    float mean = (float)sum / (float)n;
++    double sq = 0;
++    for (int i = 0; i < n; i++) { double v = (double)buf[i] - mean; sq += v * v; }
++    float rms = sqrtf((float)(sq / n));
++    uint32_t now = millis();
++    micRms = rms;
++
++    if (warm < 100) {                       // first ~1.5 s: learn the room's noise level
++      base += (rms - base) * 0.1f;
++      warm++;
++      micBase = base;
++      continue;
++    }
+ 
+-    display.drawLine(93,13,98,10,SH110X_WHITE);
+-    display.drawLine(98,10,104,12,SH110X_WHITE);
+-    display.drawLine(104,12,110,17,SH110X_WHITE);
++    bool quiet = !gSpeaking && now > gSpeakEnd;   // don't listen to our own speaker
++    if (quiet) {
++      if (rms < base * 1.3f) base += (rms - base) * 0.01f;
++      else                   base += (rms - base) * 0.0005f;
++      if (base < MIC_MIN_BASE) base = MIC_MIN_BASE;
++    }
++    micBase = base;
+ 
+-    display.drawLine(93,14,98,11,SH110X_WHITE);
+-    display.drawLine(98,11,104,13,SH110X_WHITE);
+-    display.drawLine(104,13,110,18,SH110X_WHITE);
+-}
++    float ratio = quiet ? (rms / base) : 1.0f;
++    micRatio = micRatio * 0.7f + ratio * 0.3f;
+ 
+-//==============================
+-// Surprised Brows (both raised high)
+-//==============================
+-void drawSurprisedBrows()
+-{
+-    display.drawLine(18,16,24,11,SH110X_WHITE);
+-    display.drawLine(24,11,30,8,SH110X_WHITE);
+-    display.drawLine(30,8,35,10,SH110X_WHITE);
+-
+-    display.drawLine(18,17,24,12,SH110X_WHITE);
+-    display.drawLine(24,12,30,9,SH110X_WHITE);
+-    display.drawLine(30,9,35,11,SH110X_WHITE);
+-
+-    display.drawLine(18,18,24,13,SH110X_WHITE);
+-    display.drawLine(24,13,30,10,SH110X_WHITE);
+-    display.drawLine(30,10,35,12,SH110X_WHITE);
+-
+-    display.drawLine(93,10,98,8,SH110X_WHITE);
+-    display.drawLine(98,8,104,11,SH110X_WHITE);
+-    display.drawLine(104,11,110,16,SH110X_WHITE);
+-
+-    display.drawLine(93,11,98,9,SH110X_WHITE);
+-    display.drawLine(98,9,104,12,SH110X_WHITE);
+-    display.drawLine(104,12,110,17,SH110X_WHITE);
+-
+-    display.drawLine(93,12,98,10,SH110X_WHITE);
+-    display.drawLine(98,10,104,13,SH110X_WHITE);
+-    display.drawLine(104,13,110,18,SH110X_WHITE);
+-}
+-
+-//==============================
+-// Sleeping Brows (relaxed, curved)
+-//==============================
+-void drawSleepingBrows()
+-{
+-    // Smooth curved arc (like "(" / ")" laid on its side) — several short
+-    // segments approximate a gentle, rounded, relaxed brow.
+-    int leftX[]  = {18, 21, 24, 27, 30, 33, 35};
+-    int leftY[]  = {22, 19, 17, 16, 17, 19, 22};
+-    for (int i = 0; i < 6; i++)
+-    {
+-        display.drawLine(leftX[i], leftY[i], leftX[i + 1], leftY[i + 1], SH110X_WHITE);
++    if (quiet && ratio > MIC_LOUD_RATIO && rms > MIC_LOUD_MIN && now - lastLoud > 1500) {
++      micLoud = true;
++      lastLoud = now;
+     }
+ 
+-    int rightX[] = {93, 96, 99, 102, 105, 108, 110};
+-    int rightY[] = {22, 19, 17, 16, 17, 19, 22};
+-    for (int i = 0; i < 6; i++)
+-    {
+-        display.drawLine(rightX[i], rightY[i], rightX[i + 1], rightY[i + 1], SH110X_WHITE);
++    if (quiet && micRatio > MIC_VOICE_RATIO && rms > MIC_VOICE_MIN) {
++      if (!voiceStart) voiceStart = now;
++      lastVoice = now;
+     }
++    if (voiceStart && now - lastVoice > 400) voiceStart = 0;   // short pauses in speech are fine
++    micVoiceMs = voiceStart ? (now - voiceStart) : 0;
++  }
+ }
+-//==============================
+-// Face
+-//==============================
+-void drawFace()
+-{
+-    drawEye(LEFT_EYE_X, LEFT_EYE_Y);
+-    drawEye(RIGHT_EYE_X, RIGHT_EYE_Y);
+-
+-    drawBrows(currentEmotion);
+-    
+-}
+-void lookCenter()
+-{
+-    targetEyeOffsetX = 0;
+-    targetEyeOffsetY = 0;
+ 
+-    targetPupilOffsetX = 0;
+-    targetPupilOffsetY = 0;
++static void micInit() {
++  mic.setPins(PIN_MIC_SCK, PIN_MIC_WS, -1, PIN_MIC_SD);
++  if (!mic.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT)) {
++    Serial.println("[mic] INMP441 failed to start - mic reactions disabled");
++    return;
++  }
++  micOK = true;
++  xTaskCreatePinnedToCore(micTask, "mic", 4096, nullptr, 2, nullptr, 0);
++  Serial.println("[mic] INMP441 OK");
+ }
+ 
+-void lookLeft()
+-{
+-    targetEyeOffsetX = -3;
+-    targetEyeOffsetY = 0;
++// ============================================================
++//  MOTION  (MPU6050, raw registers, no library)
++// ============================================================
+ 
+-    targetPupilOffsetX = -5;
+-    targetPupilOffsetY = 0;
++static bool mpuWrite(uint8_t reg, uint8_t val) {
++  Wire.beginTransmission(MPU_ADDR);
++  Wire.write(reg);
++  Wire.write(val);
++  return Wire.endTransmission() == 0;
+ }
+ 
+-void lookRight()
+-{
+-    targetEyeOffsetX = 3;
+-    targetEyeOffsetY = 0;
+-
+-    targetPupilOffsetX = 5;
+-    targetPupilOffsetY = 0;
++static bool mpuRead(uint8_t reg, uint8_t *buf, uint8_t len) {
++  Wire.beginTransmission(MPU_ADDR);
++  Wire.write(reg);
++  if (Wire.endTransmission(false) != 0) return false;
++  if (Wire.requestFrom((uint8_t)MPU_ADDR, len) != len) return false;
++  for (uint8_t i = 0; i < len; i++) buf[i] = Wire.read();
++  return true;
+ }
+ 
+-void lookUp()
+-{
+-    targetEyeOffsetX = 0;
+-    targetEyeOffsetY = -3;
+-
+-    targetPupilOffsetX = 0;
+-    targetPupilOffsetY = -5;
++struct Imu {
++  bool ok = false;
++  float a[3] = {0, 0, 1};
++  float g[3] = {0, 0, 0};
++  float gOff[3] = {0, 0, 0};
++  float mag = 1, shake = 0, up = 1, p = 0, q = 0;
++  float lookX = 0, lookY = 0;          // smoothed gaze direction, -1..1
++  bool shaking = false, flipped = false;
++  volatile bool evJolt = false, evFall = false, evHandled = false;
++  uint32_t last = 0, aboveSince = 0, lastJolt = 0, lastFall = 0, fallSince = 0, flipSince = 0;
++  float refP = 0, refQ = 0;
++};
++static Imu imu;
++
++static bool imuSample(float a[3], float g[3]) {
++  uint8_t d[14];
++  if (!mpuRead(0x3B, d, 14)) return false;
++  int16_t r[7];
++  for (int i = 0; i < 7; i++) r[i] = (int16_t)((d[2 * i] << 8) | d[2 * i + 1]);
++  a[0] = r[0] / 8192.0f;  a[1] = r[1] / 8192.0f;  a[2] = r[2] / 8192.0f;   // +-4 g
++  g[0] = r[4] / 65.5f;    g[1] = r[5] / 65.5f;    g[2] = r[6] / 65.5f;     // +-500 dps
++  return true;
+ }
+ 
+-void lookDown()
+-{
+-    targetEyeOffsetX = 0;
+-    targetEyeOffsetY = 3;
+-
+-    targetPupilOffsetX = 0;
+-    targetPupilOffsetY = 5;
++static void imuInit() {
++  uint8_t who = 0;
++  if (!mpuRead(0x75, &who, 1)) {
++    Serial.printf("[imu] MPU6050 not found at 0x%02X - motion reactions disabled\n", MPU_ADDR);
++    return;
++  }
++  mpuWrite(0x6B, 0x00); delay(50);   // wake up
++  mpuWrite(0x6B, 0x01);              // clock from gyro PLL
++  mpuWrite(0x1A, 0x02);              // low-pass filter ~94 Hz
++  mpuWrite(0x19, 0x04);              // 200 Hz internal rate
++  mpuWrite(0x1B, 0x08);              // gyro +-500 dps
++  mpuWrite(0x1C, 0x08);              // accel +-4 g
++  delay(100);
++
++  // gyro zero offset (keep Toki still for the first second)
++  float sum[3] = {0, 0, 0}, a[3], g[3];
++  int n = 0;
++  for (int i = 0; i < 100; i++) {
++    if (imuSample(a, g)) { for (int k = 0; k < 3; k++) sum[k] += g[k]; n++; }
++    delay(4);
++  }
++  if (n > 50) {
++    float avg[3] = { sum[0] / n, sum[1] / n, sum[2] / n };
++    if (fabsf(avg[0]) < 20 && fabsf(avg[1]) < 20 && fabsf(avg[2]) < 20)
++      for (int k = 0; k < 3; k++) imu.gOff[k] = avg[k];
++  }
++  imu.ok = true;
++  Serial.printf("[imu] MPU6050 OK (WHO_AM_I=0x%02X)\n", who);
+ }
+ 
+-void moveEyes()
+-{
+-    while (eyeoffsetx != targetEyeOffsetX ||
+-           eyeoffsety != targetEyeOffsetY ||
+-           pupilOffsetX != targetPupilOffsetX ||
+-           pupilOffsetY != targetPupilOffsetY)
+-    {
+-        if (eyeoffsetx < targetEyeOffsetX) eyeoffsetx++;
+-        else if (eyeoffsetx > targetEyeOffsetX) eyeoffsetx--;
+-
+-        if (eyeoffsety < targetEyeOffsetY) eyeoffsety++;
+-        else if (eyeoffsety > targetEyeOffsetY) eyeoffsety--;
+-
+-        if (pupilOffsetX < targetPupilOffsetX) pupilOffsetX++;
+-        else if (pupilOffsetX > targetPupilOffsetX) pupilOffsetX--;
+-
+-        if (pupilOffsetY < targetPupilOffsetY) pupilOffsetY++;
+-        else if (pupilOffsetY > targetPupilOffsetY) pupilOffsetY--;
+-
+-        drawFrame();
+-        delay(5);
+-    }
++static void imuUpdate(uint32_t now) {
++  if (!imu.ok) return;
++  float a[3], g[3];
++  if (!imuSample(a, g)) return;
++
++  for (int i = 0; i < 3; i++) { imu.a[i] = a[i]; imu.g[i] = g[i] - imu.gOff[i]; }
++  float gm = sqrtf(imu.g[0] * imu.g[0] + imu.g[1] * imu.g[1] + imu.g[2] * imu.g[2]);
++  imu.mag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
++  float dev = fabsf(imu.mag - 1.0f);
++
++  float dt = imu.last ? (float)(now - imu.last) : 30.0f;
++  imu.last = now;
++
++  // shake energy: smoothed acceleration deviation + a bit of rotation
++  float al = clampf(dt / 120.0f, 0.0f, 1.0f);
++  float prevShake = imu.shake;
++  imu.shake += ((dev + gm / 800.0f) - imu.shake) * al;
++
++  // sudden bump
++  if (dev > JOLT_G && prevShake < 0.35f && now - imu.lastJolt > 1200) {
++    imu.evJolt = true;
++    imu.lastJolt = now;
++  }
++  // free fall
++  if (imu.mag < FALL_G) {
++    if (!imu.fallSince) imu.fallSince = now;
++    else if (now - imu.fallSince > 120 && now - imu.lastFall > 2500) { imu.evFall = true; imu.lastFall = now; }
++  } else if (imu.mag > 0.6f) {
++    imu.fallSince = 0;
++  }
++  // shaking (needs to be sustained for 200 ms)
++  if (imu.shake > SHAKE_ON) {
++    if (!imu.aboveSince) imu.aboveSince = now;
++    if (now - imu.aboveSince > 200) imu.shaking = true;
++  } else if (imu.shake < SHAKE_OFF) {
++    imu.aboveSince = 0;
++    imu.shaking = false;
++  }
++
++  // orientation
++  const int ua = UP_AXIS;
++  const int pi = (ua == 0) ? 1 : 0;
++  const int qi = (ua == 2) ? 1 : 2;
++  imu.up = UP_SIGN * imu.a[ua];
++  imu.p = imu.a[pi];
++  imu.q = imu.a[qi];
++
++  bool wantFlip = imu.up < -0.7f;
++  bool wantNormal = imu.up > 0.3f;
++  if ((wantFlip && !imu.flipped) || (wantNormal && imu.flipped)) {
++    if (!imu.flipSince) imu.flipSince = now;
++    else if (now - imu.flipSince > 800) { imu.flipped = wantFlip; imu.flipSince = 0; }
++  } else {
++    imu.flipSince = 0;
++  }
++
++  // gaze follows tilt (eyes look "downhill")
++  float s = imu.flipped ? -1.0f : 1.0f;
++  float tx = clampf(-LOOK_X_SIGN * imu.p / 0.45f, -1.0f, 1.0f) * s;
++  float ty = clampf(-LOOK_Y_SIGN * imu.q / 0.45f, -1.0f, 1.0f) * s;
++  float la = clampf(dt / 250.0f, 0.0f, 1.0f);
++  imu.lookX += (tx - imu.lookX) * la;
++  imu.lookY += (ty - imu.lookY) * la;
++
++  // "someone is handling me" (small movements or tilt changes)
++  if (fabsf(imu.p - imu.refP) > 0.12f || fabsf(imu.q - imu.refQ) > 0.12f || dev > 0.15f) {
++    imu.evHandled = true;
++    imu.refP = imu.p;
++    imu.refQ = imu.q;
++  }
+ }
+ 
+-void blink()
+-{
+-    for(int i = EYE_RADIUS; i >= 0; i -= 3)
+-    {
+-        eyeOpen = i;
+-        drawFrame();
+-        delay(3);
++// ============================================================
++//  BUTTON  (BOOT button): click = pet, double click = love, hold = mute
++// ============================================================
++
++struct Btn {
++  bool down = false, longFired = false, pending = false;
++  uint32_t downAt = 0, lastClick = 0;
++  volatile bool evClick = false, evDouble = false, evLong = false;
++};
++static Btn btn;
++
++static void buttonUpdate(uint32_t now) {
++  bool pressed = digitalRead(PIN_BUTTON) == LOW;
++  if (pressed && !btn.down) {
++    btn.down = true; btn.downAt = now; btn.longFired = false;
++  } else if (pressed && btn.down) {
++    if (!btn.longFired && now - btn.downAt > 1500) { btn.longFired = true; btn.pending = false; btn.evLong = true; }
++  } else if (!pressed && btn.down) {
++    btn.down = false;
++    if (!btn.longFired && now - btn.downAt > 30) {
++      if (btn.pending && now - btn.lastClick < 400) { btn.pending = false; btn.evDouble = true; }
++      else { btn.pending = true; btn.lastClick = now; }
+     }
+-
+-    for(int i = 0; i <= EYE_RADIUS; i += 3)
+-    {
+-        eyeOpen = i;
+-        drawFrame();
+-        delay(3);
+-    }
+-
+-    
++  }
++  if (btn.pending && !btn.down && now - btn.lastClick > 400) { btn.pending = false; btn.evClick = true; }
+ }
+-void sleepy()
+-{
+-    // Start sleep sound once
+-    playSound("/sleep_toki.wav");
+-
+-    while (eyeOpen > 4)
+-    {
+-        eyeOpen--;
+-
+-        if (pupilOffsetY < 5)
+-        {
+-            pupilOffsetY++;
+-        }
+-
+-        drawFrame();
+-
+-        // Keep audio alive
+-        for (int t = 0; t < 3; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-    }
+-
+-    drawFrame();
+ 
+-    // 800 ms pause
+-    for (int t = 0; t < 80; t++)
+-    {
+-        audioLoop();
+-        delay(10);
++// ============================================================
++//  FACE
++// ============================================================
++
++struct Face {
++  float open = 0, openEff = 0;
++  float offX = 0, offY = 0, pupX = 0, pupY = 0, pupR = 5, conv = 0, jitter = 0;
++  bool blinking = false;
++  uint32_t blinkStart = 0, nextBlink = 2500;
++};
++static Face face;
++
++// current emotion state
++static Emotion  cur = NEUTRAL;
++static uint32_t emoStart = 0, emoUntil = 0;
++static bool     emoFlag = false;
++static bool     booting = true, bootBlink = false;
++static uint32_t bootStart = 0;
++static uint32_t muteShowUntil = 0;
++
++// eyebrows: left polyline, right one is the mirror image
++static const int8_t BROW_NEUTRAL[4][2]   = { {18, 22}, {24, 18}, {30, 15}, {35, 17} };
++static const int8_t BROW_HAPPY[4][2]     = { {18, 19}, {24, 15}, {30, 12}, {35, 14} };
++static const int8_t BROW_SURPRISED[4][2] = { {18, 16}, {24, 11}, {30, 8},  {35, 10} };
++static const int8_t BROW_SLEEP[7][2]     = { {18, 22}, {21, 19}, {24, 17}, {27, 16}, {30, 17}, {33, 19}, {35, 22} };
++static const int8_t BROW_ANGRY[2][2]     = { {23, 18}, {37, 24} };
++static const int8_t BROW_CURIOUS_R[4][2] = { {93, 12}, {98, 9}, {104, 11}, {110, 16} };   // right side, not mirrored
++
++static void polyBrow(const int8_t (*pts)[2], int n, bool mirror, int dx, int dy) {
++  for (int th = 0; th < 3; th++) {
++    for (int i = 0; i < n - 1; i++) {
++      int x0 = pts[i][0], y0 = pts[i][1] + th;
++      int x1 = pts[i + 1][0], y1 = pts[i + 1][1] + th;
++      if (mirror) { x0 = 128 - x0; x1 = 128 - x1; }
++      display.drawLine(x0 + dx, y0 + dy, x1 + dx, y1 + dy, SH110X_WHITE);
+     }
+-
+-    // First sleepy blink
+-    sleepyblink();
+-
+-    // 1500 ms pause
+-    for (int t = 0; t < 150; t++)
+-    {
+-        audioLoop();
+-        delay(10);
+-    }
+-
+-    // Second sleepy blink
+-    sleepyblink();
++  }
+ }
+-void wakeup()
+-{
+-    currentEmotion = NEUTRAL;
+-
+-    while (eyeOpen < EYE_RADIUS)
+-    {
+-        eyeOpen++;
+-
+-        if (pupilOffsetY > 0)
+-        {
+-            pupilOffsetY--;
+-        }
+ 
+-        drawFrame();
+-
+-        // Keep audio processing alive
+-        for (int t = 0; t < 3; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-    }
++static void drawBrows(Emotion e, int dy, int dx) {
++  switch (e) {
++    case HAPPY:
++    case LOVE:
++      polyBrow(BROW_HAPPY, 4, false, dx, dy);  polyBrow(BROW_HAPPY, 4, true, dx, dy);
++      break;
++    case SURPRISED:
++      polyBrow(BROW_SURPRISED, 4, false, dx, dy);  polyBrow(BROW_SURPRISED, 4, true, dx, dy);
++      break;
++    case ANGRY:
++      polyBrow(BROW_ANGRY, 2, false, dx, dy);  polyBrow(BROW_ANGRY, 2, true, dx, dy);
++      break;
++    case CURIOUS:
++      polyBrow(BROW_NEUTRAL, 4, false, dx, dy);
++      polyBrow(BROW_CURIOUS_R, 4, false, dx, dy);
++      break;
++    case SLEEPING:
++      polyBrow(BROW_SLEEP, 7, false, dx, dy);  polyBrow(BROW_SLEEP, 7, true, dx, dy);
++      break;
++    case SLEEPY:
++      polyBrow(BROW_NEUTRAL, 4, false, dx, dy + 1);  polyBrow(BROW_NEUTRAL, 4, true, dx, dy + 1);
++      break;
++    default:
++      polyBrow(BROW_NEUTRAL, 4, false, dx, dy);  polyBrow(BROW_NEUTRAL, 4, true, dx, dy);
++      break;
++  }
+ }
+-void sleepyblink()
+-{
+-    // Close eyes
+-    while (eyeOpen > 2)
+-    {
+-        eyeOpen--;
+-
+-        drawFrame();
+-
+-        for (int t = 0; t < 4; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-    }
+-
+-    // Slightly open eyes again
+-    while (eyeOpen < 4)
+-    {
+-        eyeOpen++;
+ 
+-        drawFrame();
+-
+-        for (int t = 0; t < 4; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-    }
++static void drawEye(int cx, int cy, int open, int px, int py, int pr, bool pupil) {
++  const int R = EYE_RADIUS;
++  if (open <= 1) {                                    // closed eye = a line
++    display.fillRect(cx - 9, cy - 1, 18, 3, SH110X_WHITE);
++    return;
++  }
++  display.fillCircle(cx, cy, R, SH110X_WHITE);
++  if (open < R) {                                     // eyelids
++    display.fillRect(cx - R, cy - R, 2 * R + 1, R - open, SH110X_BLACK);
++    display.fillRect(cx - R, cy + open, 2 * R + 1, R - open + 1, SH110X_BLACK);
++  }
++  if (pupil && open > 3) display.fillCircle(cx + px, cy + py, pr, SH110X_BLACK);
+ }
+-void happy()
+-{
+-    currentEmotion = HAPPY;
+-
+-    eyeOpen = 5;
+-    eyeoffsety = -1;
+-
+-    drawFrame();
+-
+-    // Erase left pupil
+-    display.fillCircle(
+-        LEFT_EYE_X + eyeoffsetx + pupilOffsetX,
+-        LEFT_EYE_Y + eyeoffsety + pupilOffsetY,
+-        PUPIL_RADIUS,
+-        SH110X_WHITE
+-    );
+-
+-    // Erase right pupil
+-    display.fillCircle(
+-        RIGHT_EYE_X + eyeoffsetx + pupilOffsetX,
+-        RIGHT_EYE_Y + eyeoffsety + pupilOffsetY,
+-        PUPIL_RADIUS,
+-        SH110X_WHITE
+-    );
+-
+-    // Draw happy ^
+-    int lx = LEFT_EYE_X + eyeoffsetx;
+-    int ly = LEFT_EYE_Y + eyeoffsety;
+-// Left stroke
+-    display.drawLine(lx - 4, ly + 2, lx, ly - 2, SH110X_BLACK);
+-    display.drawLine(lx - 4, ly + 2, lx, ly - 2, SH110X_BLACK);
+-    display.drawLine(lx - 4, ly + 3, lx, ly - 1, SH110X_BLACK);
+-    display.drawLine(lx - 4, ly + 3, lx, ly - 1, SH110X_BLACK);
+-
+-// Right stroke
+-   display.drawLine(lx, ly - 2, lx + 4, ly + 2, SH110X_BLACK);
+-   display.drawLine(lx, ly - 2, lx + 4, ly + 2, SH110X_BLACK);
+-   display.drawLine(lx, ly - 1, lx + 4, ly + 3, SH110X_BLACK);
+-    display.drawLine(lx, ly - 1, lx + 4, ly + 3, SH110X_BLACK);
+-
+-    int rx = RIGHT_EYE_X + eyeoffsetx;
+-    int ry = RIGHT_EYE_Y + eyeoffsety;
+-
+-    // Left stroke
+-    display.drawLine(rx - 4, ry + 2, rx, ry - 2, SH110X_BLACK);
+-    display.drawLine(rx - 4, ry + 2, rx, ry - 2, SH110X_BLACK);
+-   display.drawLine(rx - 4, ry + 3, rx, ry - 1, SH110X_BLACK);
+-   display.drawLine(rx - 4, ry + 3, rx, ry - 1, SH110X_BLACK);
+-
+-// Right stroke
+-   display.drawLine(rx, ry - 2, rx + 4, ry + 2, SH110X_BLACK);
+-   display.drawLine(rx, ry - 2, rx + 4, ry + 2, SH110X_BLACK);
+-   display.drawLine(rx, ry - 1, rx + 4, ry + 3, SH110X_BLACK);
+-   display.drawLine(rx, ry - 1, rx + 4, ry + 3, SH110X_BLACK);
+ 
+-    display.display();
++static void drawHappyEye(int cx, int cy) {            // ^ shaped eye
++  drawEye(cx, cy, 5, 0, 0, 0, false);
++  for (int k = 0; k < 2; k++) {
++    display.drawLine(cx - 4, cy + 2 + k, cx, cy - 2 + k, SH110X_BLACK);
++    display.drawLine(cx, cy - 2 + k, cx + 4, cy + 2 + k, SH110X_BLACK);
++  }
+ }
+ 
+-void drawSleepingEyes()
+-{
+-    int lx = LEFT_EYE_X + eyeoffsetx;
+-    int ly = LEFT_EYE_Y + eyeoffsety;
+-
+-    int rx = RIGHT_EYE_X + eyeoffsetx;
+-    int ry = RIGHT_EYE_Y + eyeoffsety;
+-
+-    // Erase eyes
+-    display.fillCircle(lx, ly, EYE_RADIUS, SH110X_BLACK);
+-    display.fillCircle(rx, ry, EYE_RADIUS, SH110X_BLACK);
+-
+-    // Left eye  \____/
+-    display.drawLine(lx - 8, ly,     lx - 3, ly + 2, SH110X_WHITE);
+-    display.drawLine(lx - 3, ly + 2, lx + 3, ly + 2, SH110X_WHITE);
+-    display.drawLine(lx + 3, ly + 2, lx + 8, ly,     SH110X_WHITE);
+-
+-    // Right eye  \____/
+-    display.drawLine(rx - 8, ry,     rx - 3, ry + 2, SH110X_WHITE);
+-    display.drawLine(rx - 3, ry + 2, rx + 3, ry + 2, SH110X_WHITE);
+-    display.drawLine(rx + 3, ry + 2, rx + 8, ry,     SH110X_WHITE);
++static void drawHeart(int cx, int cy, float s) {
++  int r = (int)(5 * s + 0.5f);
++  int off = (int)(4 * s + 0.5f);
++  display.fillCircle(cx - off, cy - 3, r, SH110X_WHITE);
++  display.fillCircle(cx + off, cy - 3, r, SH110X_WHITE);
++  display.fillTriangle(cx - off - r + 1, cy - 1, cx + off + r - 1, cy - 1, cx, cy + (int)(11 * s), SH110X_WHITE);
+ }
+ 
+-void drawSleepZ(int x, int y)
+-{
+-    // Top
+-    display.drawLine(x, y, x + 4, y, SH110X_WHITE);
+-
+-    // Diagonal
+-    display.drawLine(x + 4, y, x, y + 5, SH110X_WHITE);
+-
+-    // Bottom
+-    display.drawLine(x, y + 5, x + 4, y + 5, SH110X_WHITE);
++static void drawSleepZ(int x, int y) {
++  display.drawLine(x, y, x + 4, y, SH110X_WHITE);
++  display.drawLine(x + 4, y, x, y + 5, SH110X_WHITE);
++  display.drawLine(x, y + 5, x + 4, y + 5, SH110X_WHITE);
+ }
+ 
+-void sleeping()
+-{
+-    currentEmotion = SLEEPING;
+-
+-    sleepy();
+-
+-    for (int i = 0; i < 40; i++)
+-    {
+-        display.clearDisplay();
+-
+-        drawSleepingEyes();
+-        drawSleepingBrows();
+-
+-        int wobble = (i % 6 < 3) ? 1 : -1;
+-
+-        // Large Z
+-        drawSleepZ(
+-            110 - i / 2 + wobble,
+-            26 - i
+-        );
+-
+-        // Medium Z
+-        if (i > 10)
+-        {
+-            drawSleepZ(
+-                110 - (i - 10) / 2 - wobble,
+-                26 - (i - 10)
+-            );
+-        }
+-
+-        // Small Z
+-        if (i > 20)
+-        {
+-            drawSleepZ(
+-                110 - (i - 20) / 2 + wobble,
+-                26 - (i - 20)
+-            );
+-        }
+-
+-        display.display();
+-
+-        // 80 ms animation frame
+-        // while keeping audio running
+-        for (int t = 0; t < 8; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-    }
++static void drawSleeping(uint32_t now) {
++  int breath = ((now / 500) % 2) ? 1 : 0;
++  int ly = EYE_Y + breath;
++  const int xs[2] = { LEFT_EYE_X, RIGHT_EYE_X };
++  for (int i = 0; i < 2; i++) {                       // \____/ closed eyes
++    int x = xs[i];
++    display.drawLine(x - 8, ly, x - 3, ly + 2, SH110X_WHITE);
++    display.drawLine(x - 3, ly + 2, x + 3, ly + 2, SH110X_WHITE);
++    display.drawLine(x + 3, ly + 2, x + 8, ly, SH110X_WHITE);
++  }
++  drawBrows(SLEEPING, breath, 0);
++
++  uint32_t step = (now - emoStart) / 80;              // floating Zzz
++  for (int k = 0; k < 3; k++) {
++    int s = (int)((step + k * 10) % 32);
++    int zx = 110 - s / 2 + ((s % 6 < 3) ? 1 : -1);
++    int zy = 26 - s;
++    if (zy >= 0) drawSleepZ(zx, zy);
++  }
+ }
+-void surprised()
+-{
+-    currentEmotion = SURPRISED;
+-
+-    eyeOpen = EYE_RADIUS;
+-    pupilOffsetX = 0;
+-    pupilOffsetY = 0;
+-
+-    drawFrame();
+-
+-    // Bigger pupils
+-    display.fillCircle(
+-        LEFT_EYE_X + eyeoffsetx,
+-        LEFT_EYE_Y + eyeoffsety,
+-        7,
+-        SH110X_BLACK
+-    );
+-
+-    display.fillCircle(
+-        RIGHT_EYE_X + eyeoffsetx,
+-        RIGHT_EYE_Y + eyeoffsety,
+-        7,
+-        SH110X_BLACK
+-    );
+ 
+-    display.display();
++static void startBlink(uint32_t now) {
++  if (!face.blinking) { face.blinking = true; face.blinkStart = now; }
+ }
+ 
+-void angry()
+-{
+-    currentEmotion = ANGRY;
+-
+-    // Fully open eyes
+-    eyeOpen = EYE_RADIUS;
+-
+-    // Make Toki stare inward
+-    display.clearDisplay();
+-
+-    // Draw normal eyes
+-    drawEye(LEFT_EYE_X, LEFT_EYE_Y);
+-    drawEye(RIGHT_EYE_X, RIGHT_EYE_Y);
+-
+-    // Erase the normal pupils
+-    display.fillCircle(
+-        LEFT_EYE_X + eyeoffsetx + pupilOffsetX,
+-        LEFT_EYE_Y + eyeoffsety + pupilOffsetY,
+-        PUPIL_RADIUS,
+-        SH110X_WHITE
+-    );
+-
+-    display.fillCircle(
+-        RIGHT_EYE_X + eyeoffsetx + pupilOffsetX,
+-        RIGHT_EYE_Y + eyeoffsety + pupilOffsetY,
+-        PUPIL_RADIUS,
+-        SH110X_WHITE
+-    );
+-
+-    // Draw smaller pupils looking inward
+-    display.fillCircle(
+-        LEFT_EYE_X + eyeoffsetx + 2,
+-        LEFT_EYE_Y + eyeoffsety,
+-        3,
+-        SH110X_BLACK
+-    );
+-
+-    display.fillCircle(
+-        RIGHT_EYE_X + eyeoffsetx - 2,
+-        RIGHT_EYE_Y + eyeoffsety,
+-        3,
+-        SH110X_BLACK
+-    );
+-
+-    drawAngryBrows();
+-
+-    display.display();
++// where Toki looks while calm: follows tilt, otherwise glances around
++static float glanceX = 0, glanceY = 0;
++static uint32_t glanceUntil = 0, nextGlance = 3000;
++
++static void computeGaze(uint32_t now, float &lx, float &ly) {
++  lx = imu.lookX;
++  ly = imu.lookY;
++  if (!imu.ok || (fabsf(lx) < 0.2f && fabsf(ly) < 0.2f)) {
++    if (now >= nextGlance) {
++      int r = random(5);
++      glanceX = (r == 0) ? -1.0f : (r == 1) ? 1.0f : 0.0f;
++      glanceY = (r == 2) ? -0.6f : (r == 3) ? 0.6f : 0.0f;
++      glanceUntil = now + random(600, 1400);
++      nextGlance = now + random(2500, 7000);
++    }
++    if (now < glanceUntil) { lx = glanceX; ly = glanceY; }
++    else { lx = 0; ly = 0; }
++  }
+ }
+ 
+-void curious()
+-{
+-    lookLeft();
+-    moveEyes();
+-
+-    delay(500);
+-
+-    lookCenter();
+-    moveEyes();
++static void faceUpdate(uint32_t now) {
++  const uint32_t t = now - emoStart;
++  float tOpen = 12, tOffX = 0, tOffY = 0, tPupX = 0, tPupY = 0, tPupR = 5, tConv = 0, jit = 0;
++  float kOpen = 0.35f, kLook = 0.3f;
++  bool canBlink = true;
++  float lx = 0, ly = 0;
++
++  if (booting) {                                      // startup: eyes open, look around, blink
++    uint32_t tb = now - bootStart;
++    canBlink = false;
++    kOpen = 0.12f;
++    tOpen = (tb < 200) ? 0 : 12;
++    if (tb > 1100 && tb < 1600) lx = -1;
++    else if (tb >= 1600 && tb < 2100) lx = 1;
++    if (tb > 2400 && !bootBlink) { bootBlink = true; startBlink(now); }
++    tOffX = lx * 3; tPupX = lx * 5;
++  } else {
++    switch (cur) {
++      case NEUTRAL:
++        computeGaze(now, lx, ly);
++        tOffX = lx * 3; tOffY = ly * 3; tPupX = lx * 5; tPupY = ly * 5;
++        tPupR = 5.0f + 2.0f * micNorm();              // pupils pulse with sound
++        break;
++      case CURIOUS:
++        if (t < 800) lx = -1;
++        else if (t < 1600) ly = -1;
++        else if (t < 2400) lx = 1;
++        tOffX = lx * 3; tOffY = ly * 3; tPupX = lx * 5; tPupY = ly * 5;
++        break;
++      case HAPPY:
++        tOpen = 5; tOffY = -2.0f + 1.5f * sinf(t * 0.026f); kLook = 0.5f; canBlink = false;
++        break;
++      case ANGRY:
++        tPupR = 3; tConv = 2; jit = ((t / 110) % 2) ? 1.0f : -1.0f;
++        break;
++      case SURPRISED:
++        tPupR = 7;
++        if (t > 400 && !emoFlag) { emoFlag = true; startBlink(now); }
++        break;
++      case SLEEPY:
++        tOpen = 4; tPupY = 5; kOpen = 0.08f; canBlink = false;
++        if ((t > 800 && t < 1100) || (t > 2300 && t < 2600)) tOpen = 2;   // slow blinks
++        break;
++      case SLEEPING:
++        tOpen = 2; canBlink = false;
++        break;
++      case DIZZY: {
++        float a = t * 0.012f;
++        tPupX = cosf(a) * 5; tPupY = sinf(a) * 5; tOffX = sinf(t * 0.02f) * 2;
++        kLook = 0.8f; canBlink = false;
++        break;
++      }
++      case LOVE:
++        tOffY = -1.0f + sinf(t * 0.01f); kLook = 0.5f; canBlink = false;
++        break;
++    }
++  }
++
++  // automatic blinking
++  if (canBlink && !face.blinking && now >= face.nextBlink) {
++    startBlink(now);
++    face.nextBlink = now + random(2200, 5500);
++    if (random(100) < 15) face.nextBlink = now + 260;   // occasional double blink
++  }
++
++  approach(face.open, tOpen, kOpen);
++  approach(face.offX, tOffX, kLook);
++  approach(face.offY, tOffY, kLook);
++  approach(face.pupX, tPupX, kLook);
++  approach(face.pupY, tPupY, kLook);
++  approach(face.pupR, tPupR, 0.3f);
++  approach(face.conv, tConv, 0.4f);
++  face.jitter = jit;
++
++  float openEff = face.open;
++  if (face.blinking) {
++    float u = (float)(now - face.blinkStart) / 180.0f;
++    if (u >= 1.0f) face.blinking = false;
++    else openEff = face.open * (1.0f - (u < 0.5f ? u * 2.0f : (1.0f - u) * 2.0f));
++  }
++  face.openEff = openEff;
+ }
+ 
+-void neutral()
+-{
+-    currentEmotion = NEUTRAL;
+-
+-    eyeOpen = EYE_RADIUS;
+-
+-    eyeoffsetx = 0;
+-    eyeoffsety = 0;
+-
+-    pupilOffsetX = 0;
+-    pupilOffsetY = 0;
+-
+-    drawFrame();
++static void faceDraw(uint32_t now) {
++  if (!oledOK) return;
++  display.clearDisplay();
++
++  int jx = (int)roundf(face.jitter);
++  int ox = (int)roundf(face.offX) + jx;
++  int oy = (int)roundf(face.offY);
++  int open = (int)roundf(face.openEff);
++  int Lx = LEFT_EYE_X + ox, Rx = RIGHT_EYE_X + ox, Ey = EYE_Y + oy;
++  int px = (int)roundf(face.pupX), py = (int)roundf(face.pupY);
++  int pr = (int)roundf(face.pupR), cv = (int)roundf(face.conv);
++
++  switch (cur) {
++    case SLEEPING:
++      drawSleeping(now);
++      break;
++    case HAPPY:
++      drawHappyEye(Lx, Ey);
++      drawHappyEye(Rx, Ey);
++      drawBrows(HAPPY, oy, 0);
++      break;
++    case LOVE: {
++      float s = 1.0f + 0.12f * sinf((now - emoStart) * 0.012f);
++      drawHeart(Lx, Ey, s);
++      drawHeart(Rx, Ey, s);
++      drawBrows(LOVE, oy, 0);
++      break;
++    }
++    default:
++      drawEye(Lx, Ey, open, px + cv, py, pr, true);   // pupils converge when angry
++      drawEye(Rx, Ey, open, px - cv, py, pr, true);
++      drawBrows(cur, oy, jx);
++      break;
++  }
++
++  if (millis() < muteShowUntil) {
++    display.setTextSize(1);
++    display.setTextColor(SH110X_WHITE);
++    display.setCursor(38, 56);
++    display.print(gMuted ? "sound off" : "sound on");
++  }
++  display.display();
+ }
+ 
++// ============================================================
++//  BRAIN  (decides how Toki feels)
++// ============================================================
+ 
++static uint32_t lastActivity = 0, nextIdleEvent = 0, lastVoiceReact = 0;
++static bool     shakeActive = false, shakeDriven = false;
++static uint32_t shakeStart = 0, lastShake = 0;
+ 
++static void scheduleIdle(uint32_t now) { nextIdleEvent = now + random(IDLE_EVENT_MIN_MS, IDLE_EVENT_MAX_MS); }
+ 
+-
+-// ===== Added Animation Helpers =====
+-void happyBounce()
+-{
+-    for (int i = 0; i < 2; i++)
+-    {
+-        eyeoffsety = -3;
+-        happy();
+-
+-        for (int t = 0; t < 7; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-
+-        eyeoffsety = -1;
+-        happy();
+-
+-        for (int t = 0; t < 7; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-    }
+-
+-    eyeoffsety = -2;
+-    happy();
++static void setEmotion(Emotion e, uint32_t durMs, SoundId snd) {
++  uint32_t now = millis();
++  cur = e;
++  emoStart = now;
++  emoUntil = durMs ? now + durMs : 0;
++  emoFlag = false;
++  shakeDriven = false;
++  if (snd != SND_NONE) playSound(snd);
+ }
+-void angryShake()
+-{
+-    for (int i = 0; i < 3; i++)
+-    {
+-        eyeoffsetx = -1;
+-        angry();
+-
+-        for (int t = 0; t < 4; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-
+-        eyeoffsetx = 1;
+-        angry();
+-
+-        for (int t = 0; t < 4; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-    }
+ 
+-    eyeoffsetx = 0;
+-    angry();
++// change emotion only if the new one is at least as important as the current one
++static void react(Emotion e, uint32_t durMs, SoundId snd) {
++  if (EMO_PRIO[e] >= EMO_PRIO[cur]) setEmotion(e, durMs, snd);
+ }
+ 
+-void curiousAnimation()
+-{
+-    currentEmotion = CURIOUS;
+-
+-    lookLeft();
+-    moveEyes();
+-
+-    for (int t = 0; t < 25; t++)
+-    {
+-        audioLoop();
+-        delay(10);
++static void brainUpdate(uint32_t now) {
++  bool jolt = takeFlag(imu.evJolt), fall = takeFlag(imu.evFall), handled = takeFlag(imu.evHandled);
++  bool loud = takeFlag(micLoud);
++  bool click = takeFlag(btn.evClick), dbl = takeFlag(btn.evDouble), lng = takeFlag(btn.evLong);
++  uint32_t voice = micVoiceMs;
++
++  if (booting) {
++    if (now - bootStart > BOOT_MS) { booting = false; lastActivity = now; scheduleIdle(now); }
++    return;
++  }
++
++  if (lng) {                                          // long press: mute / unmute
++    gMuted = !gMuted;
++    if (gMuted) stopSound(); else playSound(SND_BLIP);
++    muteShowUntil = now + 1500;
++    saveSettings();
++  }
++
++  bool shaking = imu.shaking;
++  bool startle = jolt || fall || loud;
++  bool gentle  = handled || voice > 600 || click || dbl;
++  if (startle || shaking || gentle || lng) lastActivity = now;
++
++  // ---- asleep: wake up on activity ----
++  if (cur == SLEEPING || cur == SLEEPY) {
++    if (startle || shaking)  setEmotion(SURPRISED, 1300, SND_SURPRISE);
++    else if (gentle)         setEmotion(NEUTRAL, 0, SND_WAKE);
++    else if (cur == SLEEPY && emoUntil && now >= emoUntil) setEmotion(SLEEPING, 0, SND_NONE);
++    return;
++  }
++
++  // ---- shaking: angry, then dizzy ----
++  if (shaking) {
++    if (!shakeActive) { shakeActive = true; shakeStart = now; }
++    lastShake = now;
++    if (cur != DIZZY) {
++      if (now - shakeStart > SHAKE_DIZZY_MS) { setEmotion(DIZZY, 0, SND_DIZZY); shakeDriven = true; }
++      else if (cur != ANGRY)                 { setEmotion(ANGRY, 0, SND_ANGRY); shakeDriven = true; }
+     }
+-
+-    lookUp();
+-    moveEyes();
+-
+-    for (int t = 0; t < 25; t++)
+-    {
+-        audioLoop();
+-        delay(10);
++  } else {
++    shakeActive = false;
++    if (shakeDriven && cur == ANGRY && now - lastShake > 1200) setEmotion(NEUTRAL, 0, SND_NONE);
++    if (shakeDriven && cur == DIZZY && now - lastShake > 2500) setEmotion(NEUTRAL, 0, SND_NONE);
++  }
++
++  // ---- other reactions ----
++  if (!shaking && !shakeDriven) {
++    if (jolt || fall || loud) react(SURPRISED, 1400, SND_SURPRISE);
++    if (dbl)        react(LOVE, 4000, SND_LOVE);
++    else if (click) react(HAPPY, 2500, SND_HAPPY);
++    if (voice > 1200 && now - lastVoiceReact > 15000) {
++      react(CURIOUS, 2600, SND_CURIOUS);
++      lastVoiceReact = now;
+     }
+-
+-    lookRight();
+-    moveEyes();
+-
+-    for (int t = 0; t < 25; t++)
+-    {
+-        audioLoop();
+-        delay(10);
++  }
++
++  // ---- emotion timeout ----
++  if (emoUntil && now >= emoUntil) setEmotion(NEUTRAL, 0, SND_NONE);
++
++  // ---- calm: fall asleep or do something cute ----
++  if (cur == NEUTRAL) {
++    if (SLEEP_AFTER_MS && now - lastActivity > SLEEP_AFTER_MS) {
++      setEmotion(SLEEPY, SLEEPY_MS, SND_SLEEP);
++    } else if (now >= nextIdleEvent) {
++      scheduleIdle(now);
++      if (random(100) < 65) setEmotion(CURIOUS, 2600, SND_CURIOUS);
++      else                  setEmotion(HAPPY, 1600, SND_BLIP);
+     }
+-
+-    currentEmotion = NEUTRAL;
+-
+-    lookCenter();
+-    moveEyes();
++  }
+ }
+ 
+-void surpriseAnimation()
+-{
+-    surprised();
+-
+-    // 400 ms while keeping audio alive
+-    for (int t = 0; t < 40; t++)
+-    {
+-        audioLoop();
+-        delay(10);
+-    }
+-
+-    blink();
+-
+-    // 150 ms while keeping audio alive
+-    for (int t = 0; t < 15; t++)
+-    {
+-        audioLoop();
+-        delay(10);
+-    }
+-
+-    surprised();
++static void applyRotation() {
++#if AUTO_ROTATE
++  static bool last = false;
++  if (oledOK && imu.flipped != last) {
++    last = imu.flipped;
++    display.setRotation(last ? 2 : 0);
++  }
++#endif
+ }
+ 
+-void sleepBreathing()
+-{
+-    for (int i = 0; i < 5; i++)
+-    {
+-        eyeoffsety = 0;
+-
+-        display.clearDisplay();
+-        drawSleepingEyes();
+-        drawSleepingBrows();
+-        display.display();
+-
+-        for (int t = 0; t < 50; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-
+-        eyeoffsety = 1;
++// ============================================================
++//  SERIAL COMMANDS (for testing)
++// ============================================================
+ 
+-        display.clearDisplay();
+-        drawSleepingEyes();
+-        drawSleepingBrows();
+-        display.display();
++static bool dbgImu = false, dbgMic = false;
+ 
+-        for (int t = 0; t < 50; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-    }
++static void scanI2C() {
++  Serial.println("[i2c] scanning...");
++  int found = 0;
++  for (uint8_t addr = 1; addr < 127; addr++) {
++    Wire.beginTransmission(addr);
++    if (Wire.endTransmission() == 0) { Serial.printf("[i2c]   device at 0x%02X\n", addr); found++; }
++  }
++  if (!found) Serial.println("[i2c]   nothing found - check wiring");
+ }
+ 
+-void idleAnimation(){
+-  currentEmotion = NEUTRAL;
+-  blink();
+-  delay(300);
+-  lookLeft(); moveEyes(); delay(500);
+-  lookCenter(); moveEyes(); delay(500);
+-  lookRight(); moveEyes(); delay(500);
+-  lookCenter(); moveEyes();
+-  blink();
++static void printHelp() {
++  Serial.println("Commands: neutral happy angry curious surprised sleepy dizzy love wake");
++  Serial.println("          sound <startup|happy|curious|angry|surprise|sleep|wake|dizzy|love|blip>");
++  Serial.println("          vol <0-1>  mute  unmute  status  files  imu  mic  help");
+ }
+ 
+-void startup()
+-{
+-    eyeOpen = 0;
+-
+-    // Eyes opening
+-    for (int i = 0; i < EYE_RADIUS; i++)
+-    {
+-        eyeOpen++;
+-
+-        drawFrame();
+-
+-        // Keep audio flowing
+-        for (int t = 0; t < 4; t++)
+-        {
+-            audioLoop();
+-            delay(10);
+-        }
+-    }
+-
+-    // Blink
+-    blink();
+-
+-    // Look left
+-    lookLeft();
+-    moveEyes();
+-
+-    // Keep audio alive
+-    for (int t = 0; t < 20; t++)
+-    {
+-        audioLoop();
+-        delay(10);
+-    }
+-
+-    // Look right
+-    lookRight();
+-    moveEyes();
+-
+-    for (int t = 0; t < 20; t++)
+-    {
+-        audioLoop();
+-        delay(10);
+-    }
+-
+-    // Look center
+-    lookCenter();
+-    moveEyes();
++static void printStatus() {
++  Serial.printf("OLED:%s  IMU:%s  MIC:%s  LittleFS:%s  volume:%.2f  muted:%s\n",
++                oledOK ? "ok" : "MISSING", imu.ok ? "ok" : "MISSING", micOK ? "ok" : "MISSING",
++                fsOK ? "ok" : "FAILED", (float)gVolume, gMuted ? "yes" : "no");
++  for (int i = 0; i < SND_COUNT; i++) {
++    bool has = fsOK && LittleFS.exists(SOUNDS[i].file);
++    Serial.printf("  %-9s %-18s %s\n", SOUNDS[i].name, SOUNDS[i].file, has ? "found" : "missing -> using chirp");
++  }
++}
+ 
+-    for (int t = 0; t < 20; t++)
+-    {
+-        audioLoop();
+-        delay(10);
+-    }
++static void listFiles() {
++  if (!fsOK) { Serial.println("LittleFS not mounted"); return; }
++  File root = LittleFS.open("/");
++  File f = root.openNextFile();
++  int n = 0;
++  while (f) {
++    Serial.printf("  %s  (%u bytes)\n", f.name(), (unsigned)f.size());
++    f = root.openNextFile();
++    n++;
++  }
++  if (!n) Serial.println("  (empty - upload the data folder)");
++}
+ 
+-    // Final blink
+-    blink();
++static void handleCommand(String c) {
++  c.trim();
++  c.toLowerCase();
++  if (!c.length()) return;
++  lastActivity = millis();
++  booting = false;
++
++  if (c == "help")            printHelp();
++  else if (c == "neutral")    setEmotion(NEUTRAL, 0, SND_NONE);
++  else if (c == "happy")      setEmotion(HAPPY, 2500, SND_HAPPY);
++  else if (c == "angry")      setEmotion(ANGRY, 2000, SND_ANGRY);
++  else if (c == "curious")    setEmotion(CURIOUS, 2600, SND_CURIOUS);
++  else if (c == "surprised")  setEmotion(SURPRISED, 1400, SND_SURPRISE);
++  else if (c == "sleepy" || c == "sleep") setEmotion(SLEEPY, SLEEPY_MS, SND_SLEEP);
++  else if (c == "dizzy")      setEmotion(DIZZY, 4000, SND_DIZZY);
++  else if (c == "love")       setEmotion(LOVE, 4000, SND_LOVE);
++  else if (c == "wake")       setEmotion(NEUTRAL, 0, SND_WAKE);
++  else if (c == "mute")       { gMuted = true; stopSound(); muteShowUntil = millis() + 1500; saveSettings(); }
++  else if (c == "unmute")     { gMuted = false; muteShowUntil = millis() + 1500; playSound(SND_BLIP); saveSettings(); }
++  else if (c == "status")     printStatus();
++  else if (c == "files")      listFiles();
++  else if (c == "imu")        { dbgImu = !dbgImu; Serial.println(dbgImu ? "imu stream ON" : "imu stream OFF"); }
++  else if (c == "mic")        { dbgMic = !dbgMic; Serial.println(dbgMic ? "mic stream ON" : "mic stream OFF"); }
++  else if (c.startsWith("vol")) {
++    float v = c.substring(3).toFloat();
++    gVolume = clampf(v, 0.0f, 1.0f);
++    Serial.printf("volume = %.2f\n", (float)gVolume);
++    saveSettings();
++    playSound(SND_BLIP);
++  } else if (c.startsWith("sound")) {
++    String n = c.substring(5);
++    n.trim();
++    bool found = false;
++    for (int i = 0; i < SND_COUNT; i++) if (n == SOUNDS[i].name) { playSound((SoundId)i); found = true; }
++    if (!found) Serial.println("unknown sound name");
++  } else {
++    Serial.println("unknown command - type help");
++  }
++}
+ 
+-    // Let audio finish naturally
+-    while (wav && wav->isRunning())
+-    {
+-        audioLoop();
++static void serialPoll() {
++  static String line;
++  while (Serial.available()) {
++    char ch = (char)Serial.read();
++    if (ch == '\n' || ch == '\r') {
++      if (line.length()) { handleCommand(line); line = ""; }
++    } else if (line.length() < 48) {
++      line += ch;
+     }
++  }
+ }
+-void playSound(const char *filename)
+-{
+-    // Stop anything currently playing
+-    if (wav && wav->isRunning())
+-    {
+-        wav->stop();
+-    }
+ 
+-    delete wav;
+-    delete audioFile;
+-
+-    wav = nullptr;
+-    audioFile = nullptr;
+-
+-    audioFile = new AudioFileSourceLittleFS(filename);
++static void debugStream(uint32_t now) {
++  static uint32_t last = 0;
++  if (now - last < 200) return;
++  last = now;
++  if (dbgImu && imu.ok)
++    Serial.printf("a[g] %5.2f %5.2f %5.2f | up %5.2f | look %5.2f %5.2f | shake %4.2f%s%s\n",
++                  imu.a[0], imu.a[1], imu.a[2], imu.up, imu.lookX, imu.lookY, imu.shake,
++                  imu.shaking ? " SHAKING" : "", imu.flipped ? " FLIPPED" : "");
++  if (dbgMic && micOK)
++    Serial.printf("mic rms %7.1f | base %7.1f | ratio %5.2f | voice %lu ms\n",
++                  (float)micRms, (float)micBase, (float)micRatio, (unsigned long)micVoiceMs);
++}
+ 
+-    if (!audioFile->isOpen())
+-    {
+-        Serial.print("Audio not found: ");
+-        Serial.println(filename);
+-        return;
+-    }
++// ============================================================
++//  SETUP / LOOP
++// ============================================================
+ 
+-    wav = new AudioGeneratorWAV();
++void setup() {
++  Serial.begin(115200);
++  uint32_t t0 = millis();
++  while (!Serial && millis() - t0 < 1500) delay(10);
++  Serial.println("\n=== TOKI v1.0 ===");
++
++  pinMode(PIN_BUTTON, INPUT_PULLUP);
++  prefs.begin("toki", false);
++  gVolume = clampf(prefs.getFloat("vol", DEFAULT_VOLUME), 0.0f, 1.0f);
++  gMuted  = prefs.getBool("mute", false);
++  randomSeed(esp_random());
++
++  Wire.begin(PIN_SDA, PIN_SCL);
++  Wire.setClock(I2C_CLOCK);
++  scanI2C();
++
++  oledOK = display.begin(OLED_ADDR, true);
++  if (oledOK) {
++    display.setRotation(0);
++    display.clearDisplay();
++    display.display();
++    Serial.println("[oled] SH1106 OK");
++  } else {
++    Serial.printf("[oled] SH1106 not found at 0x%02X - running without a screen\n", OLED_ADDR);
++  }
+ 
+-    if (!wav->begin(audioFile, audioOutput))
+-    {
+-        Serial.println("WAV playback failed");
++  fsOK = LittleFS.begin(true);
++  Serial.println(fsOK ? "[fs] LittleFS OK" : "[fs] LittleFS FAILED - using chirps only");
+ 
+-        delete wav;
+-        delete audioFile;
++  soundQ = xQueueCreate(1, sizeof(uint8_t));
++  xTaskCreatePinnedToCore(audioTask, "audio", 6144, nullptr, 3, nullptr, 0);
+ 
+-        wav = nullptr;
+-        audioFile = nullptr;
++  imuInit();     // keep Toki still for this one second
++  micInit();
+ 
+-        return;
+-    }
++  bootStart = millis();
++  emoStart = bootStart;
++  booting = true;
++  playSound(SND_STARTUP);
+ 
+-    Serial.print("Playing: ");
+-    Serial.println(filename);
++  printStatus();
++  printHelp();
+ }
+ 
+-void audioLoop()
+-{
+-    if (wav && wav->isRunning())
+-    {
+-        if (!wav->loop())
+-        {
+-            wav->stop();
+-
+-            delete wav;
+-            delete audioFile;
+-
+-            wav = nullptr;
+-            audioFile = nullptr;
+-
+-            Serial.println("Audio finished");
+-        }
+-    }
++void loop() {
++  uint32_t now = millis();
++
++  serialPoll();
++  static uint32_t lastImu = 0;
++  if (now - lastImu >= 5) { lastImu = now; imuUpdate(now); }   // 200 Hz is plenty
++  buttonUpdate(now);
++  brainUpdate(now);
++  applyRotation();
++
++  static uint32_t lastFrame = 0;
++  if (now - lastFrame >= FRAME_MS) {
++    lastFrame = now;
++    faceUpdate(now);
++    faceDraw(now);
++  }
++
++  debugStream(now);
++  delay(1);
+ }
+-
+-
+-
+diff --git a/toki_types.h b/toki_types.h
+new file mode 100644
+index 0000000..1d2b9c4
+--- /dev/null
++++ b/toki_types.h
+@@ -0,0 +1,22 @@
++// Shared types for toki.ino.
++// They live in a header on purpose: the Arduino builder auto-generates
++// function prototypes, and those prototypes must be able to see these types.
++#pragma once
++#include <Arduino.h>
++
++enum Emotion : uint8_t { NEUTRAL, HAPPY, ANGRY, CURIOUS, SURPRISED, SLEEPY, SLEEPING, DIZZY, LOVE };
++
++enum SoundId : uint8_t {
++  SND_STARTUP, SND_HAPPY, SND_CURIOUS, SND_ANGRY, SND_SURPRISE,
++  SND_SLEEP, SND_WAKE, SND_DIZZY, SND_LOVE, SND_BLIP,
++  SND_COUNT,
++  SND_NONE = 255
++};
++
++struct ToneStep { uint16_t f0, f1, ms; };   // glide f0 -> f1 over ms (f0 = 0: silence)
++struct SoundDef {
++  const char *name;
++  const char *file;
++  ToneStep steps[6];
++  uint8_t nSteps;
++};
+diff --git a/tools/make_sounds.py b/tools/make_sounds.py
+new file mode 100644
+index 0000000..de7c297
+--- /dev/null
++++ b/tools/make_sounds.py
+@@ -0,0 +1,68 @@
++"""Generate Toki's sound effects: small 16-bit mono 16 kHz WAVs.
++
++Usage: python3 make_sounds.py ../data [--force]
++Existing files are kept unless --force is given.
++"""
++import numpy as np, wave, os, sys
++
++SR = 16000
++out = sys.argv[1]
++force = '--force' in sys.argv
++os.makedirs(out, exist_ok=True)
++
++def glide(f0, f1, ms, vib=0.0, vib_hz=7.0, harm=(1.0, 0.35, 0.15), phase0=0.0):
++    n = int(SR * ms / 1000)
++    t = np.arange(n) / SR
++    u = np.linspace(0, 1, n)
++    f = f0 + (f1 - f0) * u
++    f = f * (1 + vib * np.sin(2 * np.pi * vib_hz * t))
++    ph = phase0 + 2 * np.pi * np.cumsum(f) / SR
++    y = sum(a * np.sin((k + 1) * ph) for k, a in enumerate(harm))
++    y /= sum(harm)
++    env = np.minimum(1, np.minimum(u / 0.08, (1 - u) / 0.25))
++    return y * env
++
++def gap(ms):
++    return np.zeros(int(SR * ms / 1000))
++
++def seq(*parts):
++    return np.concatenate(parts)
++
++def save(name, y, peak=0.8):
++    if os.path.exists(os.path.join(out, name)) and not force:
++        print(f"{name:18s} exists, kept"); return
++    y = y / (np.max(np.abs(y)) + 1e-9) * peak
++    # tiny fade in/out against clicks
++    n = len(y); k = min(80, n // 4)
++    y[:k] *= np.linspace(0, 1, k); y[-k:] *= np.linspace(1, 0, k)
++    with wave.open(os.path.join(out, name), "wb") as w:
++        w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
++        w.writeframes((y * 32767).astype("<i2").tobytes())
++    print(f"{name:18s} {n / SR:4.2f}s  {n * 2 + 44:6d} bytes")
++
++# startup: rising "boot-up" arpeggio ending in a happy chirp
++save("startup_alt.wav", seq(glide(400, 800, 120), glide(800, 600, 80), glide(600, 1200, 160, vib=0.02),
++                            gap(40), glide(1200, 1500, 90), glide(1500, 1100, 140, vib=0.03)))
++# happy: bouncy up-down chirps
++save("happy.wav", seq(glide(700, 1100, 90), glide(1100, 900, 60), glide(900, 1400, 120, vib=0.03),
++                      gap(30), glide(1000, 1500, 100), glide(1500, 1300, 90)))
++# curious: rising question
++save("curious.wav", seq(glide(500, 900, 140), gap(60), glide(700, 1300, 220, vib=0.02)))
++# angry: low growly buzz (square-ish, fast tremolo)
++a = glide(300, 200, 160, vib=0.06, vib_hz=28, harm=(1, 0.8, 0.6, 0.4))
++b = glide(300, 160, 240, vib=0.08, vib_hz=32, harm=(1, 0.8, 0.6, 0.4))
++save("angry2.wav", seq(a, gap(40), b))
++# surprise: fast high swoop then a "boing"
++save("surprise_1.wav", seq(glide(600, 1700, 110), glide(1700, 1500, 100, vib=0.05, vib_hz=14),
++                           gap(30), glide(900, 500, 120)))
++# sleep: slow descending yawn
++save("sleep_toki.wav", seq(glide(700, 450, 350, vib=0.02, vib_hz=4), glide(450, 250, 600, vib=0.03, vib_hz=3)))
++# wake up: slow rise
++save("wake_up_2.wav", seq(glide(300, 600, 200), glide(600, 900, 180), gap(30), glide(900, 1200, 140, vib=0.02)))
++# dizzy: wobbly up/down
++save("dizzy.wav", seq(glide(500, 900, 110), glide(900, 400, 110), glide(400, 900, 110), glide(900, 300, 160, vib=0.08, vib_hz=9)))
++# love: soft two-note coo with shimmer
++save("love.wav", seq(glide(800, 1000, 120, vib=0.015, vib_hz=6, harm=(1, 0.2)), gap(40),
++                     glide(1000, 1300, 220, vib=0.02, vib_hz=6, harm=(1, 0.2)), glide(1300, 1200, 150, harm=(1, 0.2))), peak=0.7)
++# blip: tiny confirmation beep
++save("blip.wav", glide(900, 1100, 60))
+-- 
+2.43.0
+
